@@ -75,7 +75,8 @@ static int rd_kafka_conf_ssl_passwd_cb (char *buf, int size, int rwflag,
 
 static const char *rd_kafka_cert_type_names[] = {
         "public-key",
-        "private-key"
+        "private-key",
+        "CA"
 };
 
 static const char *rd_kafka_cert_enc_names[] = {
@@ -160,6 +161,11 @@ static rd_kafka_cert_t *rd_kafka_cert_new (const rd_kafka_conf_t *conf,
                         [RD_KAFKA_CERT_ENC_DER] = rd_true,
                         [RD_KAFKA_CERT_ENC_PEM] =  rd_true
                 },
+                [RD_KAFKA_CERT_CA] = {
+                        [RD_KAFKA_CERT_ENC_PKCS12] = rd_true,
+                        [RD_KAFKA_CERT_ENC_DER] = rd_true,
+                        [RD_KAFKA_CERT_ENC_PEM] = rd_true
+                },
         };
         const char *action = "";
         BIO *bio;
@@ -206,21 +212,80 @@ static rd_kafka_cert_t *rd_kafka_cert_new (const rd_kafka_conf_t *conf,
 
         switch (type)
         {
+        case RD_KAFKA_CERT_CA:
+                switch (encoding)
+                {
+                        case RD_KAFKA_CERT_ENC_PKCS12:
+                        {
+                                EVP_PKEY *ign_pkey;
+                                X509 *ign_cert;
+                                STACK_OF(X509) *cas = NULL;
+
+                                action = "parse PKCS#12";
+                                if (!PKCS12_parse(p12, conf->ssl.key_password,
+                                                  &ign_pkey, &ign_cert,
+                                                  &cas))
+                                        goto fail;
+
+                                EVP_PKEY_free(ign_pkey);
+                                X509_free(ign_cert);
+
+                                if (!cas || sk_X509_num(cas) < 1) {
+                                        action = "retrieve non-empty CA-list "
+                                                  "from PKCS#12";
+                                        if (cas)
+                                                sk_X509_pop_free(cas,
+                                                                 X509_free);
+                                        goto fail;
+                                }
+
+                                cert->x509 = sk_X509_shift(cas);
+                                sk_X509_pop_free(cas, X509_free);
+
+                                action = "retrieve CA from PKCS#12";
+                                if (!cert->x509)
+                                        goto fail;
+                        }
+                        break;
+
+                        case RD_KAFKA_CERT_ENC_DER:
+                                action = "read DER / X.509 ASN.1";
+                                cert->x509 = d2i_X509_bio(bio, NULL);
+                                if (!cert->x509)
+                                        goto fail;
+                                break;
+
+                        case RD_KAFKA_CERT_ENC_PEM:
+                                action = "read PEM";
+                                cert->x509 = PEM_read_bio_X509(
+                                        bio, NULL, rd_kafka_conf_ssl_passwd_cb,
+                                        (void *)conf);
+                                if (!cert->x509)
+                                        goto fail;
+                                break;
+
+                        default:
+                                RD_NOTREACHED();
+                                break;
+                }
+                break;
+
+
         case RD_KAFKA_CERT_PUBLIC_KEY:
                 switch (encoding)
                 {
                 case RD_KAFKA_CERT_ENC_PKCS12:
                 {
-                        EVP_PKEY *pkey;
+                        EVP_PKEY *ign_pkey;
 
                         action = "parse PKCS#12";
                         if (!PKCS12_parse(p12, conf->ssl.key_password,
-                                          &pkey, &cert->x509, NULL))
+                                          &ign_pkey, &cert->x509, NULL))
                                 goto fail;
 
-                        EVP_PKEY_free(pkey);
+                        EVP_PKEY_free(ign_pkey);
 
-                        action = "retrieve private key";
+                        action = "retrieve public key";
                         if (!cert->x509)
                                 goto fail;
                 }

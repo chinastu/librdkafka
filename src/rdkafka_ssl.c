@@ -714,9 +714,23 @@ static int rd_kafka_ssl_set_certs (rd_kafka_t *rk, SSL_CTX *ctx,
         int r;
 
         /*
-         * ssl.ca.location, or Windows cert root store, or default paths
+         * ssl_ca, ssl.ca.location, or Windows cert root store,
+         * or default paths.
          */
-        if (rk->rk_conf.ssl.ca_location) {
+        if (rk->rk_conf.ssl.ca) {
+                /* CA certificate set with conf_set_ssl_cert() */
+                rd_kafka_dbg(rk, SECURITY, "SSL",
+                             "Loading CA certificate from memory");
+
+                rd_assert(rk->rk_conf.ssl.ca->x509);
+                r = SSL_CTX_use_certificate(ctx, rk->rk_conf.ssl.ca->x509);
+                if (r != 1) {
+                        rd_snprintf(errstr, errstr_size,
+                                    "SSL CA certificate from memory failed: ");
+                        return -1;
+                }
+
+        } else if (rk->rk_conf.ssl.ca_location) {
                 /* CA certificate location, either file or directory. */
                 int is_dir = rd_kafka_path_is_dir(rk->rk_conf.ssl.ca_location);
 
